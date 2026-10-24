@@ -544,6 +544,44 @@ mod tests {
     }
 
     #[test]
+    fn parses_empty_window_session_updates() {
+        let dir = tempfile::tempdir().unwrap();
+        // Empty-window layout: <sessionId>.jsonl directly under
+        // emptyWindowChatSessions, with no workspace.json anywhere above it.
+        let sessions_dir = dir.path().join("emptyWindowChatSessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        let uuid = "f4aa6818-eb8e-4a6e-9a38-5f02d2a43803";
+        let path = sessions_dir.join(format!("{}.jsonl", uuid));
+
+        // Shape recorded in token-monitor #1195: a near-empty kind:0 stub,
+        // the request appended by kind:2, and tokens arriving as kind:1
+        // path updates with a BYOK modelId that only resolvedModel can
+        // attribute to Copilot.
+        write_jsonl(
+            &path,
+            &[
+                r#"{"kind":0,"v":{"version":3,"requests":[]}}"#,
+                r#"{"kind":2,"k":["requests"],"v":[{"requestId":"r0","timestamp":1792833865769,"modelId":"gcmp.hyper/gcmp.hyper:::deepseek-v4.1-flash-1017"}]}"#,
+                r#"{"kind":1,"k":["requests",0,"result"],"v":{"metadata":{"resolvedModel":"gcmp.hyper:::deepseek-v4.1-flash-1017"}}}"#,
+                r#"{"kind":1,"k":["requests",0,"promptTokens"],"v":50974}"#,
+                r#"{"kind":1,"k":["requests",0,"completionTokens"],"v":5292}"#,
+            ],
+        );
+
+        let messages = parse_copilot_vscode_sessions(&[path]);
+        assert_eq!(messages.len(), 1);
+        let m = &messages[0];
+        assert_eq!(m.session_id, uuid);
+        assert_eq!(m.model_id, "gcmp.hyper:::deepseek-v4.1-flash-1017");
+        assert_eq!(m.tokens.input, 50974);
+        assert_eq!(m.tokens.output, 5292);
+        // No workspace.json exists above an empty-window session, so the
+        // message must stay unattributed rather than mis-attributed.
+        assert!(m.workspace_key.is_none());
+        assert!(m.workspace_label.is_none());
+    }
+
+    #[test]
     fn streaming_parser_preserves_path_and_request_order() {
         let dir = tempfile::tempdir().unwrap();
         let sessions_dir = dir.path().join("chatSessions");
